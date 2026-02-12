@@ -2,16 +2,19 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install dependencies
+# Combine everything into one layer and clean up apt immediately
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    tesseract-ocr \
+    && pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir PyMuPDF pytesseract Pillow \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy code
 COPY . .
 
-# Expose port
-EXPOSE 7860
-
-# Run (HuggingFace uses port 7860)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
