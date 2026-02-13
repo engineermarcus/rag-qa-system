@@ -3,19 +3,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn 
 from dotenv import load_dotenv
-import os 
 from typing import List, Optional
+import logging
+import asyncio
 
 from mongo_vectorstore import MongoDBVectorStore
 from document_processor import DocumentProcessor
 from qa_chain import QAChain 
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 app = FastAPI(
-    title="RAG Document Q&A System",
-    description="AI-Powered document question answering with Gemini and MongoDB",
-    version="1.0.0"
+    title="RAG Q&A System",
+    description="Fast RAG with Jina AI + Groq",
+    version="2.0.0"
 )
 
 app.add_middleware(
@@ -26,10 +30,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-vector_store = MongoDBVectorStore()
-doc_processor = DocumentProcessor()
-qa_chain = QAChain(vector_store)
+logger.info("Initializing components...")
+try:
+    vector_store = MongoDBVectorStore()
+    doc_processor = DocumentProcessor()
+    qa_chain = QAChain(vector_store)
+    logger.info("✓ All components initialized")
+except Exception as e:
+    logger.error(f"Initialization failed: {e}", exc_info=True)
+    raise
 
 class QueryRequest(BaseModel):
     question: str
@@ -46,137 +55,130 @@ class DocumentResponse(BaseModel):
     num_chunks: int 
     message: str 
 
-
 @app.get("/")
 async def root():
-    """API root endpoint"""
     return {
-        "message": "RAG Document Q&A System - Powered by Gemini & MongoDB Atlas",
-        "version": "1.0.0",
-        "endpoints": {
-            "upload": "POST /upload - Upload PDF or DOCX documents",
-            "query": "POST /query - Ask questions about documents",
-            "delete": "DELETE /delete/{doc_id} - Delete a document by ID",
-        } 
+        "message": "RAG Q&A System",
+        "version": "2.0.0",
+        "stack": {
+            "embeddings": "Jina AI",
+            "llm": "Groq Llama 3.3",
+            "database": "MongoDB Atlas"
+        }
     }
 
 @app.get("/health")
-async def health_check():
+async def health():
     try:
         vector_store.test_connection()
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "ai_model": "gemini-2.5-flash"
-        }
+        return {"status": "healthy", "database": "connected"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Service unhealthy: {str(e)}")
-
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(500, f"Unhealthy: {e}")
 
 @app.post("/upload", response_model=DocumentResponse)
-async def upload_document(file: UploadFile = File(...)):
-    """
-    Upload and process document (PDF and Docx)
-    The document will be:
-    - Split into chunks 
-    - Embedded using hugging face Model 
-    - Stored in MongoDB 
-    """
+async def upload(file: UploadFile = File(...)):
+    logger.info(f"Upload request: {file.filename}")
+    
     try:
         if not file.filename.endswith(('.pdf', '.docx')):
-            raise HTTPException(
-                status_code=400,
-                detail="Only PDF and Docx files are supported"
-            )
-        # read file content 
+            raise HTTPException(400, "Only PDF and DOCX supported")
+        
+        logger.info("Reading file content...")
         content = await file.read()
+        logger.info(f"File size: {len(content)} bytes")
+        
+        logger.info("Processing document...")
+        
+        # Add timeout to prevent hanging
+        try:
+            doc_id, num_chunks = await asyncio.wait_for(
+                doc_processor.process_and_store(content, file.filename, vector_store),
+                timeout=300.0  # 5 minute timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error("Upload timeout after 5 minutes")
+            raise HTTPException(504, "Processing timeout - file too large")
 
-        # process file 
-        doc_id, num_chunks = await doc_processor.process_and_store(
-            content,
-            file.filename, 
-            vector_store
-        )
-
+        logger.info(f"✓ Upload complete: {num_chunks} chunks")
         return DocumentResponse(
             doc_id=doc_id,
             filename=file.filename,
             num_chunks=num_chunks,
-            message=f"Document uploaded and indexed successfully with {num_chunks} chunks"
+            message=f"Uploaded: {num_chunks} chunks"
         )
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
-
+        logger.error(f"Upload failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Upload failed: {str(e)}")
             
 @app.post("/query", response_model=QueryResponse)
-async def query_document(query_request: QueryRequest):
+async def query(req: QueryRequest):
+    logger.info(f"Query request: {req.question[:50]}...")
+    
     try:
-        if not query_request.question.strip():
-            raise HTTPException(
-                status_code=400,
-                detail="Question cannot be empty"
+        if not req.question.strip():
+            raise HTTPException(400, "Question cannot be empty")
+        
+        logger.info("Processing query...")
+        
+        # Add timeout
+        try:
+            result = await asyncio.wait_for(
+                qa_chain.ask(req.question, req.num_sources),
+                timeout=30.0  # 30 second timeout
             )
+        except asyncio.TimeoutError:
+            logger.error("Query timeout")
+            raise HTTPException(504, "Query timeout")
         
-        # get answer from QA chain 
-        result = await qa_chain.ask(query_request.question, query_request.num_sources)
-        
+        logger.info("✓ Query complete")
         return QueryResponse(
             answer=result['answer'],
             sources=result['sources'],
             confidence=result.get('confidence')
         )
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")
-
+        logger.error(f"Query failed: {e}", exc_info=True)
+        raise HTTPException(500, f"Query failed: {str(e)}")
             
 @app.get("/documents")
-async def list_documents():
-    """ 
-    List all indexed documents
-    """
+async def list_docs():
     try: 
         docs = await vector_store.list_documents()
-        return {
-            "total": len(docs),
-            "documents": docs 
-        }
+        return {"total": len(docs), "documents": docs}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list documents: {str(e)}")
+        logger.error(f"List failed: {e}")
+        raise HTTPException(500, f"Failed: {e}")
     
-
-@app.delete("/delete/{doc_id}")
-async def delete_document(doc_id: str):
-    """
-    Delete a document by ID 
-    """
+@app.delete("/documents/{doc_id}")
+async def delete_doc(doc_id: str):
     try:
-        delete_count = await vector_store.delete_document(doc_id)
-        if delete_count == 0:
-            raise HTTPException(status_code=404, detail=f"Document with ID {doc_id} not found")
-
-        return {
-            "message": f"Document deleted successfully!",
-            "doc_id": doc_id,
-            "chunks_deleted": delete_count
-        }
+        count = await vector_store.delete_document(doc_id)
+        if count == 0:
+            raise HTTPException(404, "Document not found")
+        return {"message": "Deleted", "doc_id": doc_id, "chunks_deleted": count}
     except HTTPException:
         raise 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
-
+        logger.error(f"Delete failed: {e}")
+        raise HTTPException(500, f"Delete failed: {e}")
 
 @app.get("/stats")
-async def get_stats():
-    """System Statistics"""
+async def stats():
     try:
-        stats = await vector_store.get_stats()
-        return stats
+        return await vector_store.get_stats()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
-
+        logger.error(f"Stats failed: {e}")
+        raise HTTPException(500, f"Stats failed: {e}")
 
 if __name__ == "__main__":
-    print("Starting RAG Document Q&A System")
-    print("API will be available at: http://localhost:8000")
-    print("API docs will be available at: http://localhost:8000/docs")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    logger.info("🚀 Starting RAG Q&A System")
+    logger.info("📍 http://localhost:8000")
+    logger.info("📚 http://localhost:8000/docs")
+    uvicorn.run(app, host="0.0.0.0", port=8000, timeout_keep_alive=300)

@@ -9,9 +9,9 @@ An intelligent document question-answering system using **Retrieval Augmented Ge
 
 ## Features
 
-- **Upload Documents**: Support for PDF, DOCX, and TXT files
+- **Upload Documents**: Support for PDF and DOCX
 - **Semantic Search**: Uses HuggingFace embeddings for intelligent document retrieval
-- **AI-Powered Answers**: Gemini Pro generates accurate, context-aware responses
+- **AI-Powered Answers**: gemini-2.5-flash generates accurate, context-aware responses
 - **Vector Storage**: MongoDB Atlas for scalable vector search
 - **RESTful API**: Clean, documented API with automatic Swagger docs
 - **Source Citations**: All answers include source documents and confidence scores
@@ -19,7 +19,7 @@ An intelligent document question-answering system using **Retrieval Augmented Ge
 ##  Architecture
 
 ```
-User Upload (PDF/DOCX/TXT)
+User Upload (PDF/DOCX)
     ↓
 Document Processor (splits into chunks)
     ↓
@@ -29,7 +29,7 @@ MongoDB Atlas (vector storage)
     ↓
 User Query → Vector Search → Top 3 relevant chunks
     ↓
-Gemini Pro (generates answer with context)
+gemini (generates answer with context)
     ↓
 Answer + Sources
 ```
@@ -49,21 +49,36 @@ Answer + Sources
    - [Sign up here](https://www.mongodb.com/cloud/atlas/register)
    - Get your connection string
 3. **Gemini API Key** (free tier: 60 requests/minute)
-   - [Get key here](https://makersuite.google.com/app/apikey)
+   - [Get key here](https://aistudio.google.com/u/5/api-keys)
 
 ##  Quick Start
+
+### First Things First Get api keys here
+
+# MongoDB Atlas (free tier)
+https://www.mongodb.com/cloud/atlas/register
+
+# Groq (free, generous limits)
+https://console.groq.com/keys
+
+# Jina AI (optional - works without key for basic usage)
+https://jina.ai/embeddings
 
 ### 1. Clone/Download the Project
 
 ```bash
 # If you have git
-git clone <your-repo-url>
+git clone https://github.com/engineermarcus/rag-qa-system
 cd rag-qa-system
 
 # Or just download the folder
 ```
 
 ### 2. Install Dependencies
+```sh
+sudo apt-get update
+sudo apt-get install -y tesseract-ocr libtesseract-dev
+```
 
 ```bash
 # Create virtual environment
@@ -90,12 +105,6 @@ cp .env.example .env
 # - GEMINI_API_KEY (your Google Gemini API key)
 ```
 
-Your `.env` should look like:
-```
-MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/
-GEMINI_API_KEY=AIzaSy...your_key_here
-```
-
 ### 4. Run the Application
 
 ```bash
@@ -105,6 +114,18 @@ python main.py
 The API will start at: **http://localhost:8000**
 
 API Documentation: **http://localhost:8000/docs** (interactive Swagger UI)
+
+# For Production It Is Adviced To Use Docker 
+
+## Build
+
+```sh 
+  docker build -t rag .
+```
+## Run
+```sh 
+  docker run -p 8000:8000 --name qa rag 
+```
 
 ##  API Usage
 
@@ -348,9 +369,8 @@ This is a portfolio project, but suggestions are welcome! Open an issue or submi
 ## 👤 Author
 
 **Marcus Onyango**
-- Portfolio: [Your GitHub Profile]
-- LinkedIn: [Your LinkedIn]
-- Email: [Your Email]
+- Portfolio: [https://github.com/engineermarcus]
+- Email: [engineermarcus72@gmail.com]
 
 ---
 

@@ -2,17 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Combine everything into one layer and clean up apt immediately
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
+# Minimal system deps (only for OCR - optional)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
-    && pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir PyMuPDF pytesseract Pillow \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    rm -rf /root/.cache/pip
 
 COPY . .
 

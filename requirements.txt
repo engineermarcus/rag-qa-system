@@ -1,15 +1,23 @@
-fastapi
-uvicorn
-python-multipart
-pymongo
-google-genai
-sentence-transformers
-pypdf2
-python-docx
-python-dotenv
-pydantic
-# OCR Support (for image-based PDFs)
-pdf2image==1.16.3
+# Core API
+fastapi==0.109.0
+uvicorn==0.27.0
+python-multipart==0.0.6
+python-dotenv==1.0.0
+pydantic==2.5.0
+
+# Database
+pymongo==4.6.0
+
+# Document Processing
+PyMuPDF==1.23.8
+python-docx==1.1.0
 pytesseract==0.3.10
-Pillow==10.1.0
-numpy
+Pillow==10.2.0
+
+# HTTP client for API calls
+httpx==0.26.0
+
+# Utils
+numpy==1.26.3
+
+tesseract

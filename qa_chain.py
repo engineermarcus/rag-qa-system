@@ -1,126 +1,120 @@
-from google import genai
-from google.genai import types
+import httpx
 import os
 from typing import Dict, List
 from dotenv import load_dotenv
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
+
 class QAChain:
-    """
-    Question-Answering chain using Gemini (current 2025 SDK)
-    
-    Retrieves relevant context from MongoDB and generates answers using Gemini
-    """
+    """Question-Answering using Groq"""
     
     def __init__(self, vector_store):
+        logger.info("Initializing QA chain...")
         self.vector_store = vector_store
         
-        # Configure Gemini with current SDK
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY not found in environment variables")
+        self.groq_api_key = os.getenv("GROQ_API_KEY")
+        if not self.groq_api_key:
+            raise ValueError("GROQ_API_KEY not set")
         
-        # Create client (new SDK approach)
-        self.client = genai.Client(api_key=api_key)
-        self.model_name = 'gemini-2.5-flash'  # Current model
+        self.model = "llama-3.3-70b-versatile"
+        logger.info("✓ QA chain initialized")
         
-        # System prompt for RAG
-        self.system_prompt = """You are a helpful AI assistant that answers questions based on the provided context.
-
-IMPORTANT RULES:
-1. Only use information from the provided context to answer questions
-2. If the context doesn't contain enough information to answer, say "I don't have enough information in the documents to answer that question."
-3. Always cite which document the information comes from
-4. Be concise but thorough
-5. If you're not certain, express your uncertainty
-
-Context will be provided with each question."""
+        self.system_prompt = """Answer questions based ONLY on the context provided.
+Rules: Only use context info. If insufficient, say "I don't have enough information." Cite sources."""
     
     async def ask(self, question: str, num_sources: int = 3) -> Dict:
-        """
-        Answer a question using RAG
+        logger.info(f"Processing question: {question[:50]}...")
         
-        Steps:
-        1. Retrieve relevant context from MongoDB
-        2. Format context with question
-        3. Generate answer using Gemini
-        4. Return answer with sources
-        """
-        
-        # Step 1: Retrieve relevant context
+        # Get relevant chunks
         search_results = await self.vector_store.similarity_search(
             question, 
             num_results=num_sources
         )
         
         if not search_results:
+            logger.warning("No search results found")
             return {
-                "answer": "No documents have been uploaded yet. Please upload documents first before asking questions.",
+                "answer": "No documents uploaded yet.",
                 "sources": [],
                 "confidence": "none"
             }
         
-        # Step 2: Format context
+        # Format context
         context = self._format_context(search_results)
+        logger.info(f"Context prepared ({len(context)} chars)")
         
-        # Step 3: Create prompt
-        prompt = f"""{self.system_prompt}
-
-CONTEXT FROM DOCUMENTS:
-{context}
-
-QUESTION: {question}
-
-ANSWER (cite sources):"""
-        
-        # Step 4: Generate answer using Gemini (new SDK)
+        # Generate answer
         try:
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt
-            )
-            answer = response.text
-            
-            # Determine confidence based on similarity scores
+            logger.info("Calling Groq API...")
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.groq_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": self.system_prompt},
+                            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"}
+                        ],
+                        "temperature": 0.3,
+                        "max_tokens": 1000
+                    }
+                )
+                
+                logger.info(f"Groq response status: {response.status_code}")
+                
+                if response.status_code != 200:
+                    logger.error(f"Groq error: {response.text}")
+                    raise Exception(f"Groq API failed: {response.text}")
+                
+                answer = response.json()["choices"][0]["message"]["content"]
+                logger.info(f"✓ Got answer ({len(answer)} chars)")
+                
             avg_similarity = sum(r['similarity_score'] for r in search_results) / len(search_results)
-            confidence = self._get_confidence_level(avg_similarity)
+            confidence = self._get_confidence(avg_similarity)
             
+        except httpx.TimeoutException:
+            logger.error("✗ Groq API timeout")
+            answer = "Error: API timeout"
+            confidence = "error"
         except Exception as e:
-            answer = f"Error generating answer: {str(e)}"
+            logger.error(f"✗ Answer generation failed: {e}")
+            answer = f"Error: {str(e)}"
             confidence = "error"
         
-        # Step 5: Format response
         return {
             "answer": answer,
             "sources": [
                 {
-                    "filename": result["filename"],
-                    "content": result["content"][:200] + "..." if len(result["content"]) > 200 else result["content"],
-                    "similarity_score": round(result["similarity_score"], 3),
-                    "chunk_index": result["chunk_index"]
+                    "filename": r["filename"],
+                    "content": r["content"][:200] + "..." if len(r["content"]) > 200 else r["content"],
+                    "similarity_score": round(r["similarity_score"], 3),
+                    "chunk_index": r["chunk_index"]
                 }
-                for result in search_results
+                for r in search_results
             ],
             "confidence": confidence
         }
     
-    def _format_context(self, search_results: List[Dict]) -> str:
-        """Format search results into context string"""
-        context_parts = []
-        
-        for i, result in enumerate(search_results, 1):
-            context_parts.append(
-                f"[Source {i} - {result['filename']} (chunk {result['chunk_index']})]:\n"
-                f"{result['content']}\n"
-                f"(Relevance: {result['similarity_score']:.2f})\n"
+    def _format_context(self, results: List[Dict]) -> str:
+        parts = []
+        for i, r in enumerate(results, 1):
+            parts.append(
+                f"[Source {i} - {r['filename']} (chunk {r['chunk_index']})]:\n"
+                f"{r['content']}\n"
             )
-        
-        return "\n".join(context_parts)
+        return "\n".join(parts)
     
-    def _get_confidence_level(self, avg_similarity: float) -> str:
-        """Determine confidence level based on average similarity score"""
-        if avg_similarity >= 0.7:
+    def _get_confidence(self, avg_sim: float) -> str:
+        if avg_sim >= 0.7:
             return "high"
-        elif avg_similarity >= 0.5:
+        elif avg_sim >= 0.5:
             return "medium"
-        else:
-            return "low"
+        return "low"
